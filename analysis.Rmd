@@ -1,0 +1,176 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Panos"
+date: "Tuesday, March 17, 2015"
+output: html_document
+---
+
+The goal of this analysis is to construct a predictive model for the manner (how well) a person does a particular activity given various measurements of self movement of the particular person. The [Human Activity Recongition data set](http://groupware.les.inf.puc-rio.br/har) will be used.
+
+# Download the data
+
+I download the data if not already on disk.
+
+```{r}
+train.filename <- "./data/pml-training.csv"
+test.filename <- "./data/pml-testing.csv"
+    
+if (!file.exists("./data")) {
+    dir.create("./data")
+    
+    train.url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+    download.file(train.url, destfile=train.filename, method="curl")
+    
+    test.url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+    download.file(test.url, destfile=test.filename, method="curl")
+}
+```
+
+# Data loading
+
+I load the data into data frames.
+
+```{r}
+data <- read.csv(train.filename, na.strings=c("NA","","#DIV/0!"))
+toPredict <- read.csv(test.filename, na.strings=c("NA","","#DIV/0!"))
+```
+
+# Data preprocessing
+
+The `new_window` factor has value either `"yes"` or `"no"`. I split and inspect the data.
+
+```{r}
+new_window.no.data <- data[data$new_window == "no",]
+new_window.yes.data <- data[data$new_window == "yes",]
+
+new_window.no.column.isempty <- 
+    colSums(is.na(new_window.no.data)) == nrow(new_window.no.data)
+new_window.yes.column.isempty <- 
+    colSums(is.na(new_window.yes.data)) == nrow(new_window.yes.data)
+```
+
+The `new_window="no"` data have the following columns totally empty.
+
+```{r}
+new_window.no.emptycolumns <- names(new_window.no.column.isempty[new_window.no.column.isempty])
+new_window.no.emptycolumns
+```
+
+The above columns are all summary statistics. The `new_window="yes"` data have the following columns totally empty.
+
+```{r}
+new_window.yes.emptycolumns <- names(new_window.yes.column.isempty[new_window.yes.column.isempty])
+new_window.yes.emptycolumns
+```
+
+The `new_window` factor is `"no"` in all the data I need to predict.
+
+```{r}
+unique(toPredict$new_window)
+```
+
+Therefore, I ignore the `new_window="yes"` data.
+
+```{r}
+data <- data[data$new_window == "no",]
+```
+
+I remove columns that are completely empty in the train data.
+
+```{r}
+columns.toremove <- which(colSums(is.na(data)) == nrow(data))
+data <- data[,-columns.toremove]
+toPredict <- toPredict[,-columns.toremove]
+```
+
+Now there are no missing values left in the data.
+
+```{r}
+which(colSums(is.na(data)) > 0)
+```
+
+I remove the id, username, all timestamps, and window information.
+
+```{r}
+data <- data[,-(1:7)]
+toPredict <- toPredict[,-(1:7)]
+```
+
+# Out-of-sample error
+
+```{r, message=FALSE}
+library(caret)
+library(randomForest)
+```
+
+I perform K-fold cross-validation with 10 folds and calculate the accuracy for each fold.
+
+```{r}
+set.seed(3523)
+
+n.folds <- 10
+n.tree <- 100
+
+folds <- createFolds(data$classe, k=n.folds)
+
+accuracy.for.fold <- function(i) {
+    fold <- folds[[i]]
+    train <- data[-fold,]
+    test <- data[fold,]
+    model <- randomForest(classe ~ ., train, ntree=n.tree)
+    prediction <- predict(model, test)
+    cm <- confusionMatrix(prediction, test$classe)
+    accuracy <- cm$overall[[2]]
+    return(accuracy)
+}
+
+accuracies <- sapply(1:n.folds, accuracy.for.fold)
+accuracies
+```
+
+I calculate the mean, the standard error and the the 95% confidence interval of the accuracy of the model.
+
+```{r}
+accuracy.mean <- mean(accuracies)
+accuracy.sterr <- sd(accuracies) / sqrt(n.folds)
+accuracy.confint <- accuracy.mean + c(-1,1) * qnorm(0.975) * accuracy.sterr
+accuracy.confint
+```
+
+With confidence 95% the accuracy of the model is in the interval [`r accuracy.confint[[1]]`, `r accuracy.confint[[2]]`].
+
+# Final model
+
+I fit the model to all the data.
+
+```{r}
+final.model <- randomForest(classe ~ ., data, ntree=n.tree)
+```
+
+I make predictions on the test data set.
+
+```{r}
+predictions <- predict(final.model, toPredict)
+predictions
+```
+
+I manually inspect the probabilities to see whether there are any close ties.
+
+```{r}
+probs <- predict(final.model, toPredict, type="prob")
+probs
+```
+
+Finally, I save each prediction each in a separate text file for submission.
+
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(predictions)
+```
